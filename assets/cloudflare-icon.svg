@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="cfGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6A452"/>
+      <stop offset="100%" stop-color="#F38020"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#cfGrad)" d="
+    M20 42
+    a10 10 0 0 1 -2 -19.8
+    a13 13 0 0 1 25 -3.6
+    a9 9 0 0 1 10.5 8.9
+    a9 9 0 0 1 -1.5 17
+    a5 5 0 0 1 -1 0.5
+    z" />
+  <path fill="#ffffff" fill-opacity="0.55" d="M24 30 l16 0 l-6 10 l6 0 l-14 12 l4 -14 l-6 0 z"/>
+</svg>
