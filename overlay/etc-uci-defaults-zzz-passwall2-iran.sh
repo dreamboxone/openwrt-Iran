@@ -72,35 +72,58 @@ uci commit passwall2
 # working repo -- it just needs its signing key, which we install in step 4.
 for feed_file in \
 	/etc/apk/repositories.d/distfeeds.list \
+	/etc/apk/repositories.d/passwall.list \
+	/etc/apk/repositories.d/customfeeds.list \
 	/etc/apk/repositories \
 	/etc/opkg/distfeeds.conf \
 	/etc/opkg/customfeeds.conf
 do
 	[ -f "$feed_file" ] || continue
 	# '#' used as sed delimiter so we don't have to escape '/' in the path.
-	# Matches lines that reference downloads.openwrt.org AND passwall.
-	sed -i -e '\#downloads\.openwrt\.org.*passwall#d' "$feed_file"
+	# Remove ALL passwall feed lines here; the correct, de-duplicated set is
+	# (re)written in step 5 below. This clears both the broken
+	# downloads.openwrt.org lines AND any stale/duplicate sourceforge lines.
+	sed -i -e '\#passwall#d' "$feed_file"
 done
 
-# --- 4) Ensure the Passwall apk signing key is present -----------------------
-# The Passwall sourceforge repo is signed; without its public key `apk update`
-# reports a verification error. The build bakes the key into the image at
-# /etc/apk/keys/passwall.pub. As a self-healing fallback (e.g. if the key file
-# was lost), fetch it once here on first boot when it is missing.
-if [ ! -s /etc/apk/keys/passwall.pub ]; then
+# --- 4) Ensure the Passwall apk signing key is present (correct name!) --------
+# CRITICAL: apk (OpenWrt 25.x) matches a repo's signature to a key file whose
+# NAME equals the signer identity. The Passwall repo is signed as
+# "openwrt-passwall-build.pem" -- so the key MUST be at
+#   /etc/apk/keys/openwrt-passwall-build.pem
+# A file named passwall.pub is IGNORED by apk => "UNTRUSTED signature".
+# The build bakes the key in; this heredoc self-heals it if missing, with ZERO
+# network dependency (the key is public, so embedding it is fine).
+PW_KEY="/etc/apk/keys/openwrt-passwall-build.pem"
+if [ ! -s "$PW_KEY" ]; then
 	mkdir -p /etc/apk/keys
-	for url in \
-		"https://master.dl.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
-		"https://downloads.sourceforge.net/project/openwrt-passwall-build/apk.pub"
-	do
-		if command -v wget >/dev/null 2>&1; then
-			wget -q -O /etc/apk/keys/passwall.pub "$url" && break
-		elif command -v uclient-fetch >/dev/null 2>&1; then
-			uclient-fetch -q -O /etc/apk/keys/passwall.pub "$url" && break
-		fi
-	done
-	# If the fetch produced an empty file, remove it so it is not treated as valid.
-	[ -s /etc/apk/keys/passwall.pub ] || rm -f /etc/apk/keys/passwall.pub
+	cat > "$PW_KEY" <<'PWKEY'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOmXHYLJGWFQCtbWqDqlxMvcAvkZZ
+Owy7UzzBIOxrGSAiu1blMeX96Q55Q9PH5GyjPwYiT4nrrwRgIttggGK62w==
+-----END PUBLIC KEY-----
+PWKEY
+fi
+# Remove the wrong-named key if a previous manual fix left one behind.
+rm -f /etc/apk/keys/passwall.pub 2>/dev/null
+
+# --- 5) Write the correct, signed Passwall apk feeds (no duplicates) ---------
+# Uses the device's ACTUAL release + arch so the URLs are always correct.
+# Matches the official openwrt-passwall-build method exactly.
+if [ -f /etc/openwrt_release ]; then
+	# shellcheck disable=SC1091
+	. /etc/openwrt_release
+	PW_REL="${DISTRIB_RELEASE%.*}"   # e.g. 25.12.5 -> 25.12
+	PW_ARCH="${DISTRIB_ARCH}"        # e.g. arm_cortex-a7_neon-vfpv4
+	if [ -n "$PW_REL" ] && [ -n "$PW_ARCH" ]; then
+		mkdir -p /etc/apk/repositories.d
+		PW_BASE="https://master.dl.sourceforge.net/project/openwrt-passwall-build/releases/packages-${PW_REL}/${PW_ARCH}"
+		{
+			echo "${PW_BASE}/passwall_luci/packages.adb"
+			echo "${PW_BASE}/passwall_packages/packages.adb"
+			echo "${PW_BASE}/passwall2/packages.adb"
+		} > /etc/apk/repositories.d/passwall.list
+	fi
 fi
 
 # --- refresh LuCI caches so the new rule shows immediately -------------------
