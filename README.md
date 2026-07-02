@@ -33,7 +33,9 @@
 ```bash
 cd /tmp
 sysupgrade openwrt-sysupgrade.bin
-⚠️ نکته مهم
+
+---
+نکته مهم
 
 اگر روی روتر شما OpenWRT از قبل نصب نیست، باید از فایل با نام factory استفاده کنید:
 
@@ -50,3 +52,4 @@ factory
 - یا حتی دکمه‌های GitHub (Badges)
 
 باشد.
+⚠️ 
