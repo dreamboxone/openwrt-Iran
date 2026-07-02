@@ -32,6 +32,8 @@
 cd /tmp
               
 sysupgrade openwrt-sysupgrade.bin
+
+
 ⚠️ نکته مهم
 
 اگر روی روتر شما OpenWRT از قبل نصب نیست، باید از فایل با نام زیر استفاده کنید:
