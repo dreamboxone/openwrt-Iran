@@ -1,4 +1,4 @@
-# OpenWRT Upgrade for Google Gale Router + Passwall2
+# OpenWRT for Google Gale Router + Passwall2
 
 با استفاده از این فایل، روتر Google Gale شما به آخرین نسخه **OpenWRT 25.12.5** ارتقا پیدا می‌کند و همچنین پکیج **passwall2** نیز نصب خواهد شد.
 
@@ -7,7 +7,7 @@
 ## 🚀 ویژگی‌ها
 - بروزرسانی به OpenWRT 25.12.5
 - نصب خودکار Passwall2
-- مناسب برای روتر Google Gale
+- فقط مناسب برای روتر Google Gale
 - نصب ساده و سریع
 
 ---
