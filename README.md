@@ -52,7 +52,8 @@ https://openwrt.org/toh/google/wifi?s[]=google
 
 
 📌 توضیح
-فایل sysupgrade برای آپدیت سیستم‌های دارای OpenWRT است
-فایل factory برای نصب اولیه روی دستگاه‌های بدون OpenWRT استفاده می‌شود
+
+فایل sysupgrade برای آپدیت روترهای گوگل دارای OpenWRT است
+فایل factory برای نصب اولیه روی روترهای گوگل بدون OpenWRT استفاده می‌شود
 
 نه فایل sysupgrade.
