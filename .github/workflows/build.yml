@@ -37,7 +37,7 @@ jobs:
           sudo apt-get install -y build-essential clang flex bison g++ gawk \
             gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
             python3-setuptools python3-distutils rsync swig unzip zlib1g-dev \
-            file wget ccache libelf-dev jq librsvg2-bin imagemagick
+            file wget ccache libelf-dev jq
 
       - name: Clone OpenWrt source
         run: |
@@ -59,61 +59,43 @@ jobs:
           ./scripts/feeds install -a -p passwall_packages
           ./scripts/feeds install -a -p passwall2
 
-      - name: Patch Passwall2 UI (Baidu -> Cloudflare)
+      - name: Patch Passwall2 status page (Baidu -> Cloudflare)
         working-directory: openwrt
         run: |
           set -e
-          PW2=$(find feeds -maxdepth 2 -type d -iname "passwall2" | head -n1)
-          if [ -z "$PW2" ]; then
-            echo "Could not locate the passwall2 feed directory, skipping UI patch."
+          # The connection-check logos in status.htm are embedded as inline
+          # base64 data-URIs, NOT separate image files. The old "overwrite the
+          # baidu.png file" approach found nothing to overwrite, so the logo
+          # never changed. This Python script edits the base64 inline, scoped
+          # to the Baidu block only (Google/GitHub logos are left untouched).
+          STATUS_HTM=$(find feeds -type f -path "*view/passwall2/global/status.htm" | head -n1)
+          if [ -z "$STATUS_HTM" ]; then
+            echo "Could not locate status.htm, skipping Cloudflare logo patch."
             exit 0
           fi
-          echo "Patching Passwall2 sources under: $PW2"
+          echo "Patching: $STATUS_HTM"
+          python3 "$GITHUB_WORKSPACE/scripts/patch_cf_logo.py" "$STATUS_HTM"
 
-          # 1) Text: "Baidu" -> "Cloudflare" (label) and baidu.com -> cloudflare.com (ping target)
-          grep -rlZ "Baidu" "$PW2" 2>/dev/null | xargs -0 -r sed -i 's/Baidu/Cloudflare/g'
-          grep -rlZ "baidu\.com" "$PW2" 2>/dev/null | xargs -0 -r sed -i 's/baidu\.com/cloudflare.com/g'
-
-          # 2) Icon: overwrite any "baidu.*" icon file in place, keeping its
-          #    original filename/extension so existing code references still work.
-          find "$PW2" -type f -iname "*baidu*" \
-            \( -iname "*.png" -o -iname "*.svg" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" \) \
-            -print0 | while IFS= read -r -d '' icon; do
-              ext=$(echo "${icon##*.}" | tr '[:upper:]' '[:lower:]')
-              case "$ext" in
-                svg)
-                  cp "$GITHUB_WORKSPACE/assets/cloudflare-icon.svg" "$icon"
-                  ;;
-                png)
-                  rsvg-convert -w 64 -h 64 "$GITHUB_WORKSPACE/assets/cloudflare-icon.svg" -o "$icon"
-                  ;;
-                jpg|jpeg)
-                  rsvg-convert -w 64 -h 64 "$GITHUB_WORKSPACE/assets/cloudflare-icon.svg" -o /tmp/cf-icon.png
-                  convert /tmp/cf-icon.png "$icon"
-                  ;;
-                gif|webp)
-                  rsvg-convert -w 64 -h 64 "$GITHUB_WORKSPACE/assets/cloudflare-icon.svg" -o /tmp/cf-icon.png
-                  convert /tmp/cf-icon.png "$icon"
-                  ;;
-              esac
-              echo "Replaced icon: $icon"
-            done
-
-      - name: Embed Iran geoip/geosite data + first-boot rule script
+      - name: Embed Iran geoip/geosite data + first-boot setup script
         working-directory: openwrt
         run: |
           set -e
           mkdir -p files/usr/share/v2ray
           mkdir -p files/etc/uci-defaults
 
+          # Iranian geoip/geosite data (referenced by the Iran Bypass rule as
+          # ext:geoip_IR.dat:ir / ext:geosite_IR.dat:ir).
           curl -L -o files/usr/share/v2ray/geoip_IR.dat \
             https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat
           curl -L -o files/usr/share/v2ray/geosite_IR.dat \
             https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat
 
-          cp "$GITHUB_WORKSPACE/overlay/etc-uci-defaults-99-custom-passwall2.sh" \
-            files/etc/uci-defaults/99-custom-passwall2
-          chmod +x files/etc/uci-defaults/99-custom-passwall2
+          # First-boot script. Filename MUST sort AFTER Passwall2's own
+          # "luci-passwall2" uci-defaults script (which loads the shunt node),
+          # hence the "zzz-" prefix.
+          cp "$GITHUB_WORKSPACE/overlay/etc-uci-defaults-zzz-passwall2-iran.sh" \
+            files/etc/uci-defaults/zzz-passwall2-iran
+          chmod +x files/etc/uci-defaults/zzz-passwall2-iran
 
           ls -la files/usr/share/v2ray files/etc/uci-defaults
 
@@ -137,6 +119,20 @@ jobs:
         run: |
           make -j$(nproc) V=s || make -j1 V=s
 
+      - name: Strip broken Passwall feeds from the on-device feed list
+        working-directory: openwrt
+        run: |
+          # Belt-and-suspenders: also scrub the feed list baked into the image,
+          # in addition to the first-boot cleanup in zzz-passwall2-iran. These
+          # two URLs are not hosted on downloads.openwrt.org and break apk update.
+          set -e
+          find bin/targets -type f \( -name "distfeeds.list" -o -name "distfeeds.conf" \) -print0 \
+            | while IFS= read -r -d '' f; do
+                sed -i -e '\#/passwall2/#d' -e '\#/passwall_packages/#d' "$f" || true
+                echo "Scrubbed: $f"
+              done
+          echo "Done (missing files are fine on this target)."
+
       - name: Collect build output
         working-directory: openwrt
         run: |
@@ -158,4 +154,9 @@ jobs:
           body: |
             بیلد اختصاصی برای Google WiFi (Gale) - target: ipq40xx/chromium, device: google_wifi
             شامل luci-app-passwall2 و هسته‌های xray-core و sing-box.
+
+            این نسخه شامل:
+            - قانون شانت «Iran Bypass» (دامنه‌ها و آی‌پی‌های ایران) که به صورت پیش‌فرض Direct (بایپس) روی نود شانت فعال می‌شود.
+            - جایگزینی لوگوی Baidu با لوگوی Cloudflare در صفحه وضعیت.
+            - پاک‌سازی خودکار فیدهای خراب Passwall تا apk update بدون خطا کار کند.
           files: artifacts/*
