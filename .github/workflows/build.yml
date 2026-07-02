@@ -76,6 +76,33 @@ jobs:
           echo "Patching: $STATUS_HTM"
           python3 "$GITHUB_WORKSPACE/scripts/patch_cf_logo.py" "$STATUS_HTM"
 
+      - name: Replace every remaining Baidu reference with Cloudflare
+        working-directory: openwrt
+        run: |
+          set -e
+          # Beyond status.htm, baidu.com is also used as the "is the internet
+          # up at all?" fallback probe in test.sh and socks_auto_switch.sh, and
+          # "Baidu" appears in the translation (.po) files. Replace all of it
+          # across both Passwall feeds. Lowercase internal element IDs like
+          # status_baidu are intentionally left alone -- they are invisible
+          # JS/HTML identifiers and renaming them would break the page.
+          for FEED in feeds/passwall2 feeds/passwall_packages; do
+            [ -d "$FEED" ] || continue
+            grep -rlZ --exclude-dir=.git 'baidu\.com' "$FEED" 2>/dev/null \
+              | xargs -0 -r sed -i 's/baidu\.com/cloudflare.com/g'
+            grep -rlZ --exclude-dir=.git 'Baidu' "$FEED" 2>/dev/null \
+              | xargs -0 -r sed -i 's/Baidu/Cloudflare/g'
+          done
+          echo "--- verification: remaining functional Baidu references ---"
+          # Case-sensitive 'Baidu' = visible UI text; 'baidu.com' = probe URLs.
+          # Lowercase ids (status_baidu etc.) are internal-only and expected.
+          REMAIN=$(grep -rn --exclude-dir=.git -e 'Baidu' -e 'baidu\.com' feeds/passwall2 feeds/passwall_packages 2>/dev/null || true)
+          if [ -n "$REMAIN" ]; then
+            echo "$REMAIN"
+            echo "ERROR: Baidu references still present!" && exit 1
+          fi
+          echo "OK: no visible Baidu text or baidu.com URLs remain."
+
       - name: Embed Iran geoip/geosite data + first-boot setup script
         working-directory: openwrt
         run: |
@@ -98,6 +125,35 @@ jobs:
           chmod +x files/etc/uci-defaults/zzz-passwall2-iran
 
           ls -la files/usr/share/v2ray files/etc/uci-defaults
+
+      - name: Embed Passwall apk signing key
+        working-directory: openwrt
+        run: |
+          # The Passwall sourceforge apk repo is signed. Without this public key
+          # `apk update` fails with a signature/verification error. Baking it in
+          # means the user never has to run the manual `wget .../apk.pub` fix.
+          mkdir -p files/etc/apk/keys
+          ok=0
+          for url in \
+            "https://master.dl.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
+            "https://downloads.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
+            "https://sourceforge.net/projects/openwrt-passwall-build/files/apk.pub/download"
+          do
+            echo "Trying: $url"
+            if curl -fsSL -A "Mozilla/5.0" --retry 3 --retry-delay 2 \
+                 -o files/etc/apk/keys/passwall.pub "$url"; then
+              ok=1; break
+            fi
+          done
+          if [ "$ok" = "1" ] && [ -s files/etc/apk/keys/passwall.pub ]; then
+            echo "Passwall apk key embedded:"
+            head -c 80 files/etc/apk/keys/passwall.pub; echo
+          else
+            # Do not ship an empty/invalid key. The first-boot script has a
+            # self-healing fallback that will fetch it on the device instead.
+            rm -f files/etc/apk/keys/passwall.pub
+            echo "::warning::Could not fetch passwall.pub at build time; first-boot fallback will handle it."
+          fi
 
       - name: Apply device + Passwall2 config seed
         working-directory: openwrt
@@ -128,7 +184,9 @@ jobs:
           set -e
           find bin/targets -type f \( -name "distfeeds.list" -o -name "distfeeds.conf" \) -print0 \
             | while IFS= read -r -d '' f; do
-                sed -i -e '\#/passwall2/#d' -e '\#/passwall_packages/#d' "$f" || true
+                # Only the broken downloads.openwrt.org passwall lines. Keep the
+                # working sourceforge passwall repo (its key is embedded above).
+                sed -i -e '\#downloads\.openwrt\.org.*passwall#d' "$f" || true
                 echo "Scrubbed: $f"
               done
           echo "Done (missing files are fine on this target)."
