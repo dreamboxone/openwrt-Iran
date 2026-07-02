@@ -64,9 +64,12 @@ done
 
 uci commit passwall2
 
-# --- 3) Remove the broken Passwall feeds from the on-device feed list --------
-# These two URLs do not exist on downloads.openwrt.org, so `apk update` errors.
-# They may appear in the apk feed list (25.x) and/or the opkg one (older).
+# --- 3) Remove ONLY the broken openwrt.org Passwall feeds --------------------
+# The build can leave two feed URLs that point at downloads.openwrt.org, which
+# does NOT host Passwall packages -> `apk update` fails (error 8 / unexpected
+# end of file). We delete only those. We deliberately KEEP any Passwall repo
+# hosted on sourceforge (openwrt-passwall-build), because that one is the real,
+# working repo -- it just needs its signing key, which we install in step 4.
 for feed_file in \
 	/etc/apk/repositories.d/distfeeds.list \
 	/etc/apk/repositories \
@@ -74,9 +77,31 @@ for feed_file in \
 	/etc/opkg/customfeeds.conf
 do
 	[ -f "$feed_file" ] || continue
-	# '#' used as sed delimiter so we don't have to escape the '/' in the path.
-	sed -i -e '\#/passwall2/#d' -e '\#/passwall_packages/#d' "$feed_file"
+	# '#' used as sed delimiter so we don't have to escape '/' in the path.
+	# Matches lines that reference downloads.openwrt.org AND passwall.
+	sed -i -e '\#downloads\.openwrt\.org.*passwall#d' "$feed_file"
 done
+
+# --- 4) Ensure the Passwall apk signing key is present -----------------------
+# The Passwall sourceforge repo is signed; without its public key `apk update`
+# reports a verification error. The build bakes the key into the image at
+# /etc/apk/keys/passwall.pub. As a self-healing fallback (e.g. if the key file
+# was lost), fetch it once here on first boot when it is missing.
+if [ ! -s /etc/apk/keys/passwall.pub ]; then
+	mkdir -p /etc/apk/keys
+	for url in \
+		"https://master.dl.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
+		"https://downloads.sourceforge.net/project/openwrt-passwall-build/apk.pub"
+	do
+		if command -v wget >/dev/null 2>&1; then
+			wget -q -O /etc/apk/keys/passwall.pub "$url" && break
+		elif command -v uclient-fetch >/dev/null 2>&1; then
+			uclient-fetch -q -O /etc/apk/keys/passwall.pub "$url" && break
+		fi
+	done
+	# If the fetch produced an empty file, remove it so it is not treated as valid.
+	[ -s /etc/apk/keys/passwall.pub ] || rm -f /etc/apk/keys/passwall.pub
+fi
 
 # --- refresh LuCI caches so the new rule shows immediately -------------------
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.* 2>/dev/null
