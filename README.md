@@ -29,6 +29,7 @@
 
 ### 2. اجرای دستور در روتر
 پس از ورود به ترمینال روتر، دستورات زیر را اجرا کنید:
+''''bash
 
 cd /tmp
 sysupgrade openwrt-sysupgrade.bin
