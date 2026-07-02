@@ -129,31 +129,19 @@ jobs:
       - name: Embed Passwall apk signing key
         working-directory: openwrt
         run: |
-          # The Passwall sourceforge apk repo is signed. Without this public key
-          # `apk update` fails with a signature/verification error. Baking it in
-          # means the user never has to run the manual `wget .../apk.pub` fix.
+          # apk (OpenWrt 25.x) matches a repo signature to a key file whose NAME
+          # equals the signer identity. The Passwall repo is signed as
+          # "openwrt-passwall-build.pem", so the key MUST have exactly that
+          # filename -- a file named passwall.pub is ignored => UNTRUSTED.
+          # We ship the verified key straight from this repo (no flaky download).
           mkdir -p files/etc/apk/keys
-          ok=0
-          for url in \
-            "https://master.dl.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
-            "https://downloads.sourceforge.net/project/openwrt-passwall-build/apk.pub" \
-            "https://sourceforge.net/projects/openwrt-passwall-build/files/apk.pub/download"
-          do
-            echo "Trying: $url"
-            if curl -fsSL -A "Mozilla/5.0" --retry 3 --retry-delay 2 \
-                 -o files/etc/apk/keys/passwall.pub "$url"; then
-              ok=1; break
-            fi
-          done
-          if [ "$ok" = "1" ] && [ -s files/etc/apk/keys/passwall.pub ]; then
-            echo "Passwall apk key embedded:"
-            head -c 80 files/etc/apk/keys/passwall.pub; echo
-          else
-            # Do not ship an empty/invalid key. The first-boot script has a
-            # self-healing fallback that will fetch it on the device instead.
-            rm -f files/etc/apk/keys/passwall.pub
-            echo "::warning::Could not fetch passwall.pub at build time; first-boot fallback will handle it."
-          fi
+          cp "$GITHUB_WORKSPACE/overlay/etc-apk-keys-openwrt-passwall-build.pem" \
+            files/etc/apk/keys/openwrt-passwall-build.pem
+          echo "Embedded key:"
+          cat files/etc/apk/keys/openwrt-passwall-build.pem
+          # Fail early if the key is not a valid public key.
+          openssl pkey -pubin -in files/etc/apk/keys/openwrt-passwall-build.pem -noout \
+            && echo "Key is valid." || (echo "Invalid key!" && exit 1)
 
       - name: Apply device + Passwall2 config seed
         working-directory: openwrt
@@ -215,6 +203,8 @@ jobs:
 
             این نسخه شامل:
             - قانون شانت «Iran Bypass» (دامنه‌ها و آی‌پی‌های ایران) که به صورت پیش‌فرض Direct (بایپس) روی نود شانت فعال می‌شود.
-            - جایگزینی لوگوی Baidu با لوگوی Cloudflare در صفحه وضعیت.
-            - پاک‌سازی خودکار فیدهای خراب Passwall تا apk update بدون خطا کار کند.
+            - جایگزینی کامل Baidu با Cloudflare (لوگوی رسمی + پروب سلامت + متن‌ها).
+            - جاسازی کلید امضای Passwall با نام درست (openwrt-passwall-build.pem) و بازنویسی فیدهای صحیح، تا apk update بدون خطای UNTRUSTED کار کند.
+            - پاک‌سازی خودکار فیدهای خراب downloads.openwrt.org.
+            - افزودن ویرایشگر nano.
           files: artifacts/*
