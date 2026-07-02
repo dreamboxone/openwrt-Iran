@@ -42,6 +42,7 @@ sysupgrade openwrt-sysupgrade.bin
 openwrt-factory.bin
 
 نه فایل openwrt-syupgrade.bin
+
 ضمنا اگر روی روتر گوگل، از قبل سیستم عامل OpenWRT نصب نیست برای نصب نیاز به تجهیزاتی دارید و دستوراتی که در آدرس زیر قابل مطالعه است:
 
 https://openwrt.org/toh/google/wifi?s[]=google
