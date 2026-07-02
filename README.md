@@ -38,7 +38,18 @@ sysupgrade openwrt-sysupgrade.bin
 
 اگر روی روتر شما OpenWRT از قبل نصب نیست، باید از فایل با نام زیر استفاده کنید:
 
-factory
+⚠️ نکته مهم
+
+اگر روی روتر شما OpenWRT از قبل نصب نیست، باید از فایل با نام زیر استفاده کنید:
+
+openwrt-factory.bin
+
+نه فایل openwrt-syupgrade.bin
+
+
+📌 توضیح
+فایل sysupgrade برای آپدیت سیستم‌های دارای OpenWRT است
+فایل factory برای نصب اولیه روی دستگاه‌های بدون OpenWRT استفاده می‌شود
 
 نه فایل sysupgrade.
 
