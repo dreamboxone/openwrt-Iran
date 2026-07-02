@@ -56,7 +56,3 @@ https://openwrt.org/toh/google/wifi?s[]=google
 فایل factory برای نصب اولیه روی دستگاه‌های بدون OpenWRT استفاده می‌شود
 
 نه فایل sysupgrade.
-
-📌 توضیح
-فایل sysupgrade برای آپدیت سیستم‌های دارای OpenWRT است
-فایل factory برای نصب اولیه روی دستگاه‌های بدون OpenWRT استفاده می‌شود
