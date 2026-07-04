@@ -62,3 +62,6 @@ https://openwrt.org/toh/google/wifi?s[]=google
 ⚠️ نکته مهم ۲
 
 تمامی مسئولیت نصب این فایل و خرابی احتمالی روتر گوگل بر عهده شماست.
+لینگ آموزش در بوتیوب:
+
+[[https://www.youtube.com/watch?v=08vnI9CZFlM&t=12s)](https://www.youtube.com/watch?v=08vnI9CZFlM&t=12s](https://www.youtube.com/watch?v=08vnI9CZFlM&t=12s)
