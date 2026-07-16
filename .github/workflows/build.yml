@@ -1,31 +1,80 @@
 name: Build OpenWrt + Passwall2 for Google WiFi (Gale)
 
 on:
+  # Check every third calendar day. At month boundaries an extra early check
+  # can occur, but the gap never exceeds the requested 72 hours.
+  # The expensive build starts only when an upstream release has changed.
+  schedule:
+    - cron: "23 2 */3 * *"
   workflow_dispatch:
     inputs:
-      openwrt_tag:
-        description: "OpenWrt git tag/branch to build"
-        required: true
-        default: "v25.12.5"
-      config_file:
-        description: "Path (in this repo) to the .config seed file"
-        required: true
-        default: "config/google_wifi-passwall2.config"
+      openwrt_version:
+        description: "Optional stable OpenWrt version override (for example 25.12.5)"
+        required: false
+        type: string
+      passwall2_tag:
+        description: "Optional Passwall2 release tag override"
+        required: false
+        type: string
+      force_build:
+        description: "Build even if this exact release already exists"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+concurrency:
+  group: openwrt-google-wifi-release
+  cancel-in-progress: false
 
 env:
   TZ: Asia/Tehran
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  check:
+    name: Check stable upstream releases
+    runs-on: ubuntu-24.04
+    outputs:
+      openwrt_version: ${{ steps.versions.outputs.openwrt_version }}
+      openwrt_tag: ${{ steps.versions.outputs.openwrt_tag }}
+      passwall2_tag: ${{ steps.versions.outputs.passwall2_tag }}
+      release_tag: ${{ steps.versions.outputs.release_tag }}
+      should_build: ${{ steps.versions.outputs.should_build }}
     steps:
-      - name: Checkout this repo
+      - name: Checkout this repository
         uses: actions/checkout@v4
 
-      - name: Free up disk space
+      - name: Detect latest stable versions
+        id: versions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_OPENWRT_VERSION: ${{ inputs.openwrt_version }}
+          INPUT_PASSWALL2_TAG: ${{ inputs.passwall2_tag }}
+          INPUT_FORCE_BUILD: ${{ inputs.force_build }}
+        run: python3 scripts/check_updates.py
+
+      - name: No update found
+        if: steps.versions.outputs.should_build != 'true'
+        run: echo "This OpenWrt + Passwall2 combination is already published."
+
+  build:
+    name: Build both Google WiFi images
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      OPENWRT_VERSION: ${{ needs.check.outputs.openwrt_version }}
+      OPENWRT_TAG: ${{ needs.check.outputs.openwrt_tag }}
+      PASSWALL2_TAG: ${{ needs.check.outputs.passwall2_tag }}
+      RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
@@ -39,53 +88,45 @@ jobs:
             python3-setuptools python3-distutils rsync swig unzip zlib1g-dev \
             file wget ccache libelf-dev jq
 
-      - name: Clone OpenWrt source
+      - name: Clone the selected stable OpenWrt release
         run: |
-          git clone --depth 1 --branch "${{ github.event.inputs.openwrt_tag }}" \
+          git clone --depth 1 --branch "$OPENWRT_TAG" \
             https://github.com/openwrt/openwrt.git openwrt
 
-      - name: Add Passwall2 feeds
+      - name: Add Passwall feeds
         working-directory: openwrt
         run: |
-          sed -i '1i src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main' feeds.conf.default
+          sed -i '1i src-git passwall2 https://github.com/Openwrt-Passwall/openwrt-passwall2.git' feeds.conf.default
           sed -i '1i src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' feeds.conf.default
           cat feeds.conf.default
 
-      - name: Update & install feeds
+      - name: Pin Passwall2 to its stable release and install feeds
         working-directory: openwrt
         run: |
+          set -e
           ./scripts/feeds update -a
+          git -C feeds/passwall2 fetch --depth 1 origin "refs/tags/$PASSWALL2_TAG:refs/tags/$PASSWALL2_TAG"
+          git -C feeds/passwall2 checkout --detach "$PASSWALL2_TAG"
+          test "$(git -C feeds/passwall2 describe --tags --exact-match)" = "$PASSWALL2_TAG"
           ./scripts/feeds install -a
           ./scripts/feeds install -a -p passwall_packages
           ./scripts/feeds install -a -p passwall2
 
-      - name: Patch Passwall2 status page (Baidu -> Cloudflare)
+      - name: Patch Passwall2 status page (Baidu to Cloudflare)
         working-directory: openwrt
         run: |
           set -e
-          # The connection-check logos in status.htm are embedded as inline
-          # base64 data-URIs, NOT separate image files. The old "overwrite the
-          # baidu.png file" approach found nothing to overwrite, so the logo
-          # never changed. This Python script edits the base64 inline, scoped
-          # to the Baidu block only (Google/GitHub logos are left untouched).
           STATUS_HTM=$(find feeds -type f -path "*view/passwall2/global/status.htm" | head -n1)
           if [ -z "$STATUS_HTM" ]; then
             echo "Could not locate status.htm, skipping Cloudflare logo patch."
             exit 0
           fi
-          echo "Patching: $STATUS_HTM"
           python3 "$GITHUB_WORKSPACE/scripts/patch_cf_logo.py" "$STATUS_HTM"
 
       - name: Replace every remaining Baidu reference with Cloudflare
         working-directory: openwrt
         run: |
           set -e
-          # Beyond status.htm, baidu.com is also used as the "is the internet
-          # up at all?" fallback probe in test.sh and socks_auto_switch.sh, and
-          # "Baidu" appears in the translation (.po) files. Replace all of it
-          # across both Passwall feeds. Lowercase internal element IDs like
-          # status_baidu are intentionally left alone -- they are invisible
-          # JS/HTML identifiers and renaming them would break the page.
           for FEED in feeds/passwall2 feeds/passwall_packages; do
             [ -d "$FEED" ] || continue
             grep -rlZ --exclude-dir=.git 'baidu\.com' "$FEED" 2>/dev/null \
@@ -93,66 +134,46 @@ jobs:
             grep -rlZ --exclude-dir=.git 'Baidu' "$FEED" 2>/dev/null \
               | xargs -0 -r sed -i 's/Baidu/Cloudflare/g'
           done
-          echo "--- verification: remaining functional Baidu references ---"
-          # Case-sensitive 'Baidu' = visible UI text; 'baidu.com' = probe URLs.
-          # Lowercase ids (status_baidu etc.) are internal-only and expected.
-          REMAIN=$(grep -rn --exclude-dir=.git -e 'Baidu' -e 'baidu\.com' feeds/passwall2 feeds/passwall_packages 2>/dev/null || true)
+          REMAIN=$(grep -rn --exclude-dir=.git -e 'Baidu' -e 'baidu\.com' \
+            feeds/passwall2 feeds/passwall_packages 2>/dev/null || true)
           if [ -n "$REMAIN" ]; then
             echo "$REMAIN"
-            echo "ERROR: Baidu references still present!" && exit 1
+            echo "ERROR: Baidu references still present."
+            exit 1
           fi
-          echo "OK: no visible Baidu text or baidu.com URLs remain."
 
-      - name: Embed Iran geoip/geosite data + first-boot setup script
+      - name: Embed Iran routing data and first-boot setup
         working-directory: openwrt
         run: |
           set -e
-          mkdir -p files/usr/share/v2ray
-          mkdir -p files/etc/uci-defaults
-
-          # Iranian geoip/geosite data (referenced by the Iran Bypass rule as
-          # ext:geoip_IR.dat:ir / ext:geosite_IR.dat:ir).
-          curl -L -o files/usr/share/v2ray/geoip_IR.dat \
+          mkdir -p files/usr/share/v2ray files/etc/uci-defaults
+          curl --fail --location --retry 3 -o files/usr/share/v2ray/geoip_IR.dat \
             https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat
-          curl -L -o files/usr/share/v2ray/geosite_IR.dat \
+          curl --fail --location --retry 3 -o files/usr/share/v2ray/geosite_IR.dat \
             https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat
-
-          # First-boot script. Filename MUST sort AFTER Passwall2's own
-          # "luci-passwall2" uci-defaults script (which loads the shunt node),
-          # hence the "zzz-" prefix.
+          test -s files/usr/share/v2ray/geoip_IR.dat
+          test -s files/usr/share/v2ray/geosite_IR.dat
           cp "$GITHUB_WORKSPACE/overlay/etc-uci-defaults-zzz-passwall2-iran.sh" \
             files/etc/uci-defaults/zzz-passwall2-iran
           chmod +x files/etc/uci-defaults/zzz-passwall2-iran
 
-          ls -la files/usr/share/v2ray files/etc/uci-defaults
-
-      - name: Embed Passwall apk signing key
+      - name: Embed Passwall APK signing key
         working-directory: openwrt
         run: |
-          # apk (OpenWrt 25.x) matches a repo signature to a key file whose NAME
-          # equals the signer identity. The Passwall repo is signed as
-          # "openwrt-passwall-build.pem", so the key MUST have exactly that
-          # filename -- a file named passwall.pub is ignored => UNTRUSTED.
-          # We ship the verified key straight from this repo (no flaky download).
+          set -e
           mkdir -p files/etc/apk/keys
           cp "$GITHUB_WORKSPACE/overlay/etc-apk-keys-openwrt-passwall-build.pem" \
             files/etc/apk/keys/openwrt-passwall-build.pem
-          echo "Embedded key:"
-          cat files/etc/apk/keys/openwrt-passwall-build.pem
-          # Fail early if the key is not a valid public key.
-          openssl pkey -pubin -in files/etc/apk/keys/openwrt-passwall-build.pem -noout \
-            && echo "Key is valid." || (echo "Invalid key!" && exit 1)
+          openssl pkey -pubin \
+            -in files/etc/apk/keys/openwrt-passwall-build.pem -noout
 
-      - name: Apply device + Passwall2 config seed
+      - name: Apply device and Passwall2 configuration
         working-directory: openwrt
         run: |
-          cp "$GITHUB_WORKSPACE/${{ github.event.inputs.config_file }}" .config
+          cp "$GITHUB_WORKSPACE/config/google_wifi-passwall2.config" .config
           make defconfig
-
-      - name: Show resolved package list (sanity check)
-        working-directory: openwrt
-        run: |
-          grep -i passwall .config || echo "WARNING: passwall not found in resolved .config"
+          grep -q '^CONFIG_TARGET_ipq40xx_chromium_DEVICE_google_wifi=y$' .config
+          grep -q '^CONFIG_PACKAGE_luci-app-passwall2=y$' .config
 
       - name: Download package sources
         working-directory: openwrt
@@ -160,51 +181,56 @@ jobs:
 
       - name: Build firmware
         working-directory: openwrt
-        run: |
-          make -j$(nproc) V=s || make -j1 V=s
+        run: make -j"$(nproc)" V=s || make -j1 V=s
 
-      - name: Strip broken Passwall feeds from the on-device feed list
+      - name: Collect and validate factory and sysupgrade images
         working-directory: openwrt
         run: |
-          # Belt-and-suspenders: also scrub the feed list baked into the image,
-          # in addition to the first-boot cleanup in zzz-passwall2-iran. These
-          # two URLs are not hosted on downloads.openwrt.org and break apk update.
           set -e
-          find bin/targets -type f \( -name "distfeeds.list" -o -name "distfeeds.conf" \) -print0 \
-            | while IFS= read -r -d '' f; do
-                # Only the broken downloads.openwrt.org passwall lines. Keep the
-                # working sourceforge passwall repo (its key is embedded above).
-                sed -i -e '\#downloads\.openwrt\.org.*passwall#d' "$f" || true
-                echo "Scrubbed: $f"
-              done
-          echo "Done (missing files are fine on this target)."
-
-      - name: Collect build output
-        working-directory: openwrt
-        run: |
           mkdir -p ../artifacts
-          find bin/targets -type f \( -name "*factory*" -o -name "*sysupgrade*" -o -name "*.manifest" -o -name "sha256sums" \) -exec cp {} ../artifacts/ \;
-          ls -la ../artifacts
+          FACTORY=$(find bin/targets/ipq40xx/chromium -maxdepth 1 -type f \
+            -name '*google_wifi*squashfs-factory.bin' -print -quit)
+          SYSUPGRADE=$(find bin/targets/ipq40xx/chromium -maxdepth 1 -type f \
+            -name '*google_wifi*squashfs-sysupgrade.bin' -print -quit)
+          test -n "$FACTORY" && test -s "$FACTORY"
+          test -n "$SYSUPGRADE" && test -s "$SYSUPGRADE"
+          SAFE_PW_TAG=$(printf '%s' "$PASSWALL2_TAG" | sed 's/[^0-9A-Za-z._-]/-/g')
+          PREFIX="openwrt-google-wifi-ac1304-${OPENWRT_VERSION}-passwall2-${SAFE_PW_TAG}"
+          cp "$FACTORY" "../artifacts/${PREFIX}-factory.bin"
+          cp "$SYSUPGRADE" "../artifacts/${PREFIX}-sysupgrade.bin"
+          cp bin/targets/ipq40xx/chromium/*.manifest ../artifacts/ 2>/dev/null || true
+          cd ../artifacts
+          sha256sum *.bin > sha256sums
+          test "$(find . -maxdepth 1 -name '*-factory.bin' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name '*-sysupgrade.bin' | wc -l)" -eq 1
+          cat sha256sums
 
-      - name: Upload build artifacts (workflow run)
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-google_wifi-passwall2
+          name: openwrt-google-wifi-${{ env.OPENWRT_VERSION }}-passwall2-${{ env.PASSWALL2_TAG }}
           path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: gale-${{ github.event.inputs.openwrt_tag }}-${{ github.run_number }}
-          name: "OpenWrt ${{ github.event.inputs.openwrt_tag }} + Passwall2 (Google WiFi / Gale)"
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "OpenWrt ${{ env.OPENWRT_VERSION }} + Passwall2 ${{ env.PASSWALL2_TAG }} (Google WiFi AC-1304)"
+          prerelease: false
+          make_latest: true
           body: |
-            بیلد اختصاصی برای Google WiFi (Gale) - target: ipq40xx/chromium, device: google_wifi
-            شامل luci-app-passwall2 و هسته‌های xray-core و sing-box.
+            بیلد خودکار برای Google WiFi AC-1304 (Gale)
 
-            این نسخه شامل:
-            - قانون شانت «Iran Bypass» (دامنه‌ها و آی‌پی‌های ایران) که به صورت پیش‌فرض Direct (بایپس) روی نود شانت فعال می‌شود.
-            - جایگزینی کامل Baidu با Cloudflare (لوگوی رسمی + پروب سلامت + متن‌ها).
-            - جاسازی کلید امضای Passwall با نام درست (openwrt-passwall-build.pem) و بازنویسی فیدهای صحیح، تا apk update بدون خطای UNTRUSTED کار کند.
-            - پاک‌سازی خودکار فیدهای خراب downloads.openwrt.org.
-            - افزودن ویرایشگر nano.
+            - OpenWrt رسمی و پایدار: `${{ env.OPENWRT_VERSION }}`
+            - Passwall2 رسمی: `${{ env.PASSWALL2_TAG }}`
+            - target: `ipq40xx/chromium`
+            - device: `google_wifi`
+            - قانون Iran Bypass برای عبور مستقیم دامنه‌ها و IPهای ایران
+
+            فایل `factory.bin` برای نصب اولیه روی دستگاه فاقد OpenWrt است.
+            فایل `sysupgrade.bin` برای ارتقای دستگاهی است که OpenWrt دارد.
+
+            هش SHA-256 هر دو فایل در `sha256sums` قرار دارد.
           files: artifacts/*
