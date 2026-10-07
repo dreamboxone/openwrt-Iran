@@ -134,3 +134,25 @@ OpenWrt operating system, and to the developers and contributors of
 and maintaining Passwall2.
 
 </div>
+
+---
+
+<div dir="rtl">
+
+## 💚 حمایت از این پروژه
+
+اگر این پروژه به کارتان آمده، می‌توانید با واریز تتر از آن حمایت کنید:
+
+**USDT (تتر) — فقط شبکه BEP20 (BSC)**
+
+</div>
+
+```
+0x56daaa6b76d88ee0c8dba8042121f4b77de0a813
+```
+
+<div dir="rtl">
+
+> ⚠️ این آدرس فقط برای واریز تتر در شبکه BEP20 (BSC) است. واریز ارز دیگر یا از شبکه دیگر به این آدرس از دست می‌رود.
+
+</div>
