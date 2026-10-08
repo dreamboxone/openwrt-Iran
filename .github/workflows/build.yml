@@ -70,6 +70,7 @@ jobs:
       OPENWRT_TAG: ${{ needs.check.outputs.openwrt_tag }}
       PASSWALL2_TAG: ${{ needs.check.outputs.passwall2_tag }}
       RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+      GOLANG_BRANCH: "27.x"
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v4
@@ -124,6 +125,17 @@ jobs:
           git -C feeds/passwall2 fetch --depth 1 origin "refs/tags/$PASSWALL2_TAG:refs/tags/$PASSWALL2_TAG"
           git -C feeds/passwall2 checkout --detach "$PASSWALL2_TAG"
           test "$(git -C feeds/passwall2 describe --tags --exact-match)" = "$PASSWALL2_TAG"
+
+          # Xray-core and other Passwall Go packages track the newest Go
+          # release, which the stable OpenWrt packages feed lags behind.
+          clone_golang() {
+            rm -rf feeds/packages/lang/golang
+            git clone --depth 1 --branch "$GOLANG_BRANCH" \
+              https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
+          }
+          retry clone_golang
+          grep -E '^GO_VERSION_(MAJOR_MINOR|PATCH):=' feeds/packages/lang/golang/golang/Makefile
+
           ./scripts/feeds install -a
           ./scripts/feeds install -a -p passwall_packages
           ./scripts/feeds install -a -p passwall2
